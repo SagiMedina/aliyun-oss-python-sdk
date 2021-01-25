@@ -7,9 +7,10 @@ oss2.http
 这个模块包含了HTTP Adapters。尽管OSS Python SDK内部使用requests库进行HTTP通信，但是对使用者是透明的。
 该模块中的 `Session` 、 `Request` 、`Response` 对requests的对应的类做了简单的封装。
 """
-
+import asyncio
 import platform
 
+import aiohttp
 import requests
 from requests.structures import CaseInsensitiveDict
 
@@ -30,22 +31,30 @@ class Session(object):
     """属于同一个Session的请求共享一组连接池，如有可能也会重用HTTP连接。"""
 
     def __init__(self):
-        self.session = requests.Session()
-
         psize = defaults.connection_pool_size
-        self.session.mount('http://', requests.adapters.HTTPAdapter(pool_connections=psize, pool_maxsize=psize))
-        self.session.mount('https://', requests.adapters.HTTPAdapter(pool_connections=psize, pool_maxsize=psize))
+        self.connector = aiohttp.TCPConnector(limit=(psize - 1))
+        self.semaphore = asyncio.Semaphore(psize)
+        self.session = aiohttp.ClientSession(connector=(self.connector))
 
-    def do_request(self, req, timeout):
+    def __del__(self):
+        if not self.session.closed:
+            self.connector._close()
+
+    async def close(self):
+        if not self.session.closed:
+            await self.session.close()
+
+    async def do_request(self, req, timeout):
         try:
             logger.debug("Send request, method: {0}, url: {1}, params: {2}, headers: {3}, timeout: {4}".format(
                 req.method, req.url, req.params, req.headers, timeout))
-            return Response(self.session.request(req.method, req.url,
+            _timeout = aiohttp.ClientTimeout(total=timeout)
+            response = await self.session.request(req.method, req.url,
                                                  data=req.data,
                                                  params=req.params,
                                                  headers=req.headers,
-                                                 stream=True,
-                                                 timeout=timeout))
+                                                 timeout=_timeout)
+            return Response(response)
         except requests.RequestException as e:
             raise RequestError(e)
 
@@ -68,7 +77,7 @@ class Request(object):
 
         # tell requests not to add 'Accept-Encoding: gzip, deflate' by default
         if 'Accept-Encoding' not in self.headers:
-            self.headers['Accept-Encoding'] = None
+            self.headers['Accept-Encoding'] = 'None'
 
         if 'User-Agent' not in self.headers:
             if app_name:
@@ -86,7 +95,7 @@ _CHUNK_SIZE = 8 * 1024
 class Response(object):
     def __init__(self, response):
         self.response = response
-        self.status = response.status_code
+        self.status = response.status
         self.headers = response.headers
         self.request_id = response.headers.get('x-oss-request-id', '')
 
@@ -104,13 +113,13 @@ class Response(object):
         logger.debug("Get response headers, req-id:{0}, status: {1}, headers: {2}".format(self.request_id, self.status,
                                                                                           self.headers))
 
-    def read(self, amt=None):
+    async def read(self, amt=None):
         if self.__all_read:
             return b''
 
         if amt is None:
             content_list = []
-            for chunk in self.response.iter_content(_CHUNK_SIZE):
+            async for chunk in self.response.content.iter_chunked(_CHUNK_SIZE):
                 content_list.append(chunk)
             content = b''.join(content_list)
 
@@ -118,14 +127,13 @@ class Response(object):
             return content
         else:
             try:
-                return next(self.response.iter_content(amt))
+                return next(self.response.content.iter_chunked(amt))
             except StopIteration:
                 self.__all_read = True
                 return b''
 
     def __iter__(self):
-        return self.response.iter_content(_CHUNK_SIZE)
-
+        return self.response.content.iter_chunked(_CHUNK_SIZE)
 
 # requests对于具有fileno()方法的file object，会用fileno()的返回值作为Content-Length。
 # 这对于已经读取了部分内容，或执行了seek()的file object是不正确的。

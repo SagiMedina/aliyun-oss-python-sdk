@@ -213,14 +213,14 @@ class _Base(object):
 
         self._make_url = _UrlMaker(self.endpoint, is_cname)
 
-    def _do(self, method, bucket_name, key, **kwargs):
+    async def _do(self, method, bucket_name, key, **kwargs):
         key = to_string(key)
         req = http.Request(method, self._make_url(bucket_name, key),
                            app_name=self.app_name,
                            **kwargs)
         self.auth._sign_request(req, bucket_name, key)
 
-        resp = self.session.do_request(req, timeout=self.timeout)
+        resp = await self.session.do_request(req, timeout=self.timeout)
         if resp.status // 100 != 2:
             e = exceptions.make_exception(resp)
             logger.info("Exception: {0}".format(e))
@@ -671,7 +671,7 @@ class Bucket(_Base):
 
         return result
 
-    def get_object(self, key,
+    async def get_object(self, key,
                    byte_range=None,
                    headers=None,
                    progress_callback=None,
@@ -714,7 +714,7 @@ class Bucket(_Base):
 
         logger.debug("Start to get object, bucket: {0}， key: {1}, range: {2}, headers: {3}, params: {4}".format(
             self.bucket_name, to_string(key), range_string, headers, params))
-        resp = self.__do_object('GET', key, headers=headers, params=params)
+        resp = await self.__do_object('GET', key, headers=headers, params=params)
         logger.debug("Get object done, req_id: {0}, status_code: {1}".format(resp.request_id, resp.status))
 
         return GetObjectResult(resp, progress_callback, self.enable_crc)
@@ -2344,8 +2344,8 @@ class Bucket(_Base):
         logger.debug("Get bucket config done, req_id: {0}, status_code: {1}".format(resp.request_id, resp.status))
         return resp
 
-    def __do_object(self, method, key, **kwargs):
-        return self._do(method, self.bucket_name, key, **kwargs)
+    async def __do_object(self, method, key, **kwargs):
+        return await self._do(method, self.bucket_name, key, **kwargs)
 
     def __do_bucket(self, method, **kwargs):
         return self._do(method, self.bucket_name, '', **kwargs)

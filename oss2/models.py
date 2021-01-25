@@ -309,8 +309,8 @@ class GetObjectResult(HeadObjectResult):
         range_start, range_end = range_data.split('-', 2)
         return int(range_start), int(range_end)
 
-    def read(self, amt=None):
-        return self.stream.read(amt)
+    async def read(self, amt=None):
+        return await self.stream.read(amt)
 
     def __iter__(self):
         return iter(self.stream)
